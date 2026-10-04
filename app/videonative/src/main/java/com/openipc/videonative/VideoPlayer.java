@@ -51,6 +51,8 @@ public class VideoPlayer implements IVideoParamsChanged {
 
     public static native void nativeSetUdpForwarding(long nativeInstance, String ip, int port, boolean enabled);
 
+    public static native void nativeSetUdpConfig(long nativeInstance, String bindAddr, int port);
+
     public static native void nativeSetLowLatency(long nativeInstance, boolean enabled);
 
     public static native void nativeStartDvr(long nativeInstance, int fd, int fmp4_enabled);
@@ -139,6 +141,18 @@ public class VideoPlayer implements IVideoParamsChanged {
     public void setUdpForwarding(String ip, int port, boolean enabled) {
         verifyApplicationThread();
         nativeSetUdpForwarding(nativeVideoPlayer, ip, port, enabled);
+    }
+
+    /**
+     * Configure the local UDP listen endpoint. Call before {@link #start()}.
+     *
+     * @param bindAddr "0.0.0.0" (or "") to listen on every interface, or a
+     *                 specific local IPv4 address.
+     * @param port     UDP port to bind.
+     */
+    public void setUdpConfig(String bindAddr, int port) {
+        verifyApplicationThread();
+        nativeSetUdpConfig(nativeVideoPlayer, bindAddr, port);
     }
 
     public void startDvr(int fd, boolean enabled_fmp4) {

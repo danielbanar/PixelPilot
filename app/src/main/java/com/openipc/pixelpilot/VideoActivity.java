@@ -115,6 +115,11 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
     private static final long MODEL_LITE2_BYTES = 23096891L;
     private static final String PREF_OD_CUSTOM_MODEL_URI = "od_custom_model_uri";
     private static final String PREF_OD_CUSTOM_MODEL_NAME = "od_custom_model_name";
+    private static final String PREF_VIDEO_URL = "video_url";
+    private static final String PREF_USE_VPN   = "use_vpn";
+
+    private static final String DEFAULT_VIDEO_URL = "udp://0.0.0.0:5600";
+    private static final boolean DEFAULT_USE_VPN  = true;
     final Handler handler = new Handler(Looper.getMainLooper());
     final Runnable runnable = new Runnable() {
         public void run() {
@@ -176,6 +181,104 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
     public static int getBandwidth(Context context) {
         return context.getSharedPreferences("general",
                 Context.MODE_PRIVATE).getInt("bandwidth", 20);
+    }
+        private String getVideoUrl() {
+        return getSharedPreferences("general", MODE_PRIVATE)
+                .getString(PREF_VIDEO_URL, DEFAULT_VIDEO_URL);
+    }
+
+    private boolean getUseVpn() {
+        return getSharedPreferences("general", MODE_PRIVATE)
+                .getBoolean(PREF_USE_VPN, DEFAULT_USE_VPN);
+    }
+
+    /**
+     * Parse something like "udp://[host][:port]" and forward the bind address
+     * and port to the native player. Also returns the parsed values so callers
+     * can log / display them.
+     *
+     * Accepts:
+     *   udp://:5600
+     *   udp://0.0.0.0:5600
+     *   udp://192.168.1.10:5600
+     *   udp://192.168.1.10
+     *   5600                (bare port)
+     */
+    private int[] applyVideoUrlSetting() {
+        String raw = getVideoUrl().trim();
+        String bindAddr = "0.0.0.0";
+        int    port     = 5600;
+
+        try {
+            String rest = raw;
+            int schemeIdx = rest.indexOf("://");
+            if (schemeIdx >= 0) {
+                rest = rest.substring(schemeIdx + 3);
+            }
+
+            // Split trailing /path if present
+            int slash = rest.indexOf('/');
+            if (slash >= 0) rest = rest.substring(0, slash);
+
+            int lastColon = rest.lastIndexOf(':');
+            if (lastColon >= 0) {
+                String hostPart = rest.substring(0, lastColon);
+                String portPart = rest.substring(lastColon + 1);
+                if (!hostPart.isEmpty()) bindAddr = hostPart;
+                try { port = Integer.parseInt(portPart); }
+                catch (NumberFormatException ignored) {}
+            } else if (!rest.isEmpty()) {
+                try { port = Integer.parseInt(rest); }
+                catch (NumberFormatException e) { bindAddr = rest; }
+            }
+
+            if (port <= 0 || port > 65535) {
+                Log.w(TAG, "Invalid port in URL '" + raw + "', using 5600");
+                port = 5600;
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to parse video URL '" + raw + "'", e);
+        }
+
+        Log.i(TAG, "Video source: bind=" + bindAddr + " port=" + port);
+        if (videoPlayer != null) {
+            videoPlayer.setUdpConfig(bindAddr, port);
+        }
+        return new int[]{ port };
+    }
+
+    private void showVideoUrlDialog() {
+        android.widget.LinearLayout layout = new android.widget.LinearLayout(this);
+        layout.setOrientation(android.widget.LinearLayout.VERTICAL);
+        layout.setPadding(50, 30, 50, 30);
+
+        final android.widget.EditText urlEdit = new android.widget.EditText(this);
+        urlEdit.setHint("udp://0.0.0.0:5600");
+        urlEdit.setText(getVideoUrl());
+        layout.addView(urlEdit);
+
+        final android.widget.TextView hint = new android.widget.TextView(this);
+        hint.setText("Format: udp://[bind-address]:[port]\n" +
+                     "Examples:\n" +
+                     "  udp://0.0.0.0:5600   (any interface)\n" +
+                     "  udp://:5600          (any interface)\n" +
+                     "  udp://192.168.1.10:5600\n" +
+                     "\nA restart is required for the change to take effect.");
+        layout.addView(hint);
+
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("Video Source")
+                .setView(layout)
+                .setPositiveButton("Save & Restart", (dialog, which) -> {
+                    String url = urlEdit.getText().toString().trim();
+                    if (url.isEmpty()) url = DEFAULT_VIDEO_URL;
+                    getSharedPreferences("general", MODE_PRIVATE).edit()
+                            .putString(PREF_VIDEO_URL, url).commit();
+                    Toast.makeText(this, "Restarting with new source...", Toast.LENGTH_SHORT).show();
+                    resetApp();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
     }
 
     /**
@@ -337,7 +440,11 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
         setupBatteryReceiver();
 
         // wfbNg VPN Service
-        startVpnService();
+        if (getUseVpn()) {
+            startVpnService();
+        } else {
+            Log.i(TAG, "onCreate: VPN disabled by user");
+        }
     }
 
     // ----------------------------------------------------------------------------
@@ -739,7 +846,7 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
      * stop()/start(). So the toggle restarts the app, the same way the VR mode toggle
      * does, instead of promising an "on next video start" that never comes.
      */
-    private void setupVideoSubMenu(PopupMenu popup) {
+        private void setupVideoSubMenu(PopupMenu popup) {
         SubMenu videoMenu = popup.getMenu().addSubMenu("Video");
 
         MenuItem lowLatencyItem = videoMenu.add("Low latency");
@@ -748,10 +855,28 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
         lowLatencyItem.setOnMenuItemClickListener(item -> {
             boolean enabled = !item.isChecked();
             item.setChecked(enabled);
-            // commit(), not apply(): resetApp() ends the process with System.exit()
-            // before an asynchronous write would be flushed.
             getSharedPreferences("general", MODE_PRIVATE).edit()
                     .putBoolean("low_latency_decoder", enabled).commit();
+            item.setShowAsAction(MenuItem.SHOW_AS_ACTION_COLLAPSE_ACTION_VIEW);
+            item.setActionView(new View(this));
+            resetApp();
+            return false;
+        });
+
+        MenuItem sourceItem = videoMenu.add("Source URL (" + getVideoUrl() + ")");
+        sourceItem.setOnMenuItemClickListener(item -> {
+            showVideoUrlDialog();
+            return true;
+        });
+
+        MenuItem vpnItem = videoMenu.add("Use VPN");
+        vpnItem.setCheckable(true);
+        vpnItem.setChecked(getUseVpn());
+        vpnItem.setOnMenuItemClickListener(item -> {
+            boolean enabled = !item.isChecked();
+            item.setChecked(enabled);
+            getSharedPreferences("general", MODE_PRIVATE).edit()
+                    .putBoolean(PREF_USE_VPN, enabled).commit();
             item.setShowAsAction(MenuItem.SHOW_AS_ACTION_COLLAPSE_ACTION_VIEW);
             item.setActionView(new View(this));
             resetApp();
@@ -1065,6 +1190,8 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
         MenuItem enableItem = forwardMenu.add("Enable");
         enableItem.setCheckable(true);
         enableItem.setChecked(enabled);
+        // commit(), not apply(): resetApp() ends the process with System.exit()
+        // before an asynchronous write would be flushed.
         enableItem.setOnMenuItemClickListener(item -> {
             boolean newState = !item.isChecked();
             item.setChecked(newState);
@@ -1547,11 +1674,12 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
         videoPlayer.stopAudio();
         wfbLinkManager.stopAdapters();
 
-        // Stop VPN service
-        Log.w(TAG, "onPause: stopping service");
-        Intent intent = new Intent(this, WfbNgVpnService.class);
-        intent.setAction("STOP_SERVICE");
-        startService(intent);
+        if (getUseVpn()) {
+            Log.w(TAG, "onPause: stopping service");
+            Intent intent = new Intent(this, WfbNgVpnService.class);
+            intent.setAction("STOP_SERVICE");
+            startService(intent);
+        }
     }
 
     @Override
@@ -1571,14 +1699,16 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
 
         wfbLinkManager.setChannel(getChannel(this));
         wfbLinkManager.setBandwidth(getBandwidth(this));
-
-        // On resume is called when the app is reopened, a device might have been plugged since the last time it started.
         wfbLinkManager.refreshAdapters();
 
         wfbLinkManager.startAdapters();
+
+        if (videoPlayer != null) {
+        applyVideoUrlSetting();
         videoPlayer.start();
         updateUdpForwardingState();
         videoPlayer.startAudio();
+        }
 
         SharedPreferences prefs = getSharedPreferences("general", MODE_PRIVATE);
         boolean odEnabled = prefs.getBoolean("od_enabled", false);
@@ -1586,7 +1716,11 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
 
         osdManager.restoreOSDConfig();
 
-        startVpnService();
+        if (getUseVpn()) {
+            startVpnService();
+        } else {
+            Log.i(TAG, "onResume: VPN disabled by user, not starting WfbNgVpnService");
+        }
 
         super.onResume();
     }
@@ -1661,13 +1795,19 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
                 binding.tvMessage.setVisibility(View.GONE);
                 binding.wifiMessage.setVisibility(View.GONE);
             }
-            String info = "%dx%d@%.0f " + (decodingInfo.nCodec == 1 ? " H265 " : " H264 ")
+
+            //   P = parsing, W = wait for input buffer, D = hw decoder hold time
+            String info = "%dx%d@%.0f "
+                    + (decodingInfo.nCodec == 1 ? " H265 " : " H264 ")
                     + (decodingInfo.currentKiloBitsPerSecond > 1000 ? " %.1fMbps " : " %.1fKpbs ")
-                    + " %.1fms";
+                    + " P:%.1f W:%.1f D:%.1f ms";
+
             binding.tvVideoStats.setText(String.format(Locale.US, info,
                     lastVideoW, lastVideoH, decodingInfo.currentFPS,
                     decodingInfo.currentKiloBitsPerSecond / 1000,
-                    decodingInfo.avgTotalDecodingTime_ms));
+                    decodingInfo.avgParsingTime_ms,
+                    decodingInfo.avgWaitForInputBTime_ms,
+                    decodingInfo.avgHWDecodingTime_ms));
         });
     }
 

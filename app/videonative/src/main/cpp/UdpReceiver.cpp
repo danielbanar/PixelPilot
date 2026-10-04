@@ -1,7 +1,3 @@
-//
-// Created by gaeta on 2024-04-01.
-//
-
 #include "UdpReceiver.h"
 #include <arpa/inet.h>
 #include <array>
@@ -16,12 +12,14 @@
 
 UDPReceiver::UDPReceiver(
     JavaVM*       javaVm,
+    std::string   bindAddr,
     int           port,
     std::string   name,
     int           CPUPriority,
     DATA_CALLBACK onDataReceivedCallback,
     size_t        WANTED_RCVBUF_SIZE)
-    : mPort(port),
+    : mBindAddr(std::move(bindAddr)),
+      mPort(port),
       mName(std::move(name)),
       WANTED_RCVBUF_SIZE(WANTED_RCVBUF_SIZE),
       mCPUPriority(CPUPriority),
@@ -103,12 +101,25 @@ void UDPReceiver::receiveFromUDPLoop()
     }
     struct sockaddr_in myaddr;
     memset((uint8_t*) &myaddr, 0, sizeof(myaddr));
-    myaddr.sin_family      = AF_INET;
-    myaddr.sin_addr.s_addr = htonl(INADDR_ANY);
-    myaddr.sin_port        = htons(mPort);
+    myaddr.sin_family = AF_INET;
+    myaddr.sin_port   = htons(mPort);
+  
+    if (mBindAddr.empty() || mBindAddr == "0.0.0.0" || mBindAddr == "*")
+    {
+        myaddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    }
+    else
+    {
+        if (inet_pton(AF_INET, mBindAddr.c_str(), &myaddr.sin_addr) != 1)
+        {
+            MLOGE << "Invalid bind address '" << mBindAddr << "', falling back to INADDR_ANY";
+            myaddr.sin_addr.s_addr = htonl(INADDR_ANY);
+        }
+    }
+
     if (bind(mSocket, (struct sockaddr*) &myaddr, sizeof(myaddr)) == -1)
     {
-        MLOGE << "Error binding Port; " << mPort;
+        MLOGE << "Error binding " << mBindAddr << ":" << mPort;
         return;
     }
     // wrap into unique pointer to avoid running out of stack

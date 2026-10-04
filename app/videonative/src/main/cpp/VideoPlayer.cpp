@@ -161,11 +161,11 @@ void VideoPlayer::start(JNIEnv* env, jobject androidContext)
 {
     AAssetManager* assetManager = NDKHelper::getAssetManagerFromContext2(env, androidContext);
     // mParser.setLimitFPS(-1); //Default: Real time !
-    const int VS_PORT = 5600;
     mUDPReceiver.release();
     mUDPReceiver = std::make_unique<UDPReceiver>(
         javaVm,
-        VS_PORT,
+        mUdpBindAddr,
+        mUdpPort,
         "UdpReceiver",
         -16,
         [this](const uint8_t* data, size_t data_length) { onNewRTPData(data, data_length); },
@@ -174,19 +174,14 @@ void VideoPlayer::start(JNIEnv* env, jobject androidContext)
     mUDPReceiver->startReceiving();
 
     mUDSReceiver.release();
-    // build the abstract socket name ("\0my_socket")
     auto udsName = std::string("\0my_socket", sizeof("\0my_socket") - 1);
-
-    // now construct your receiver with that
     mUDSReceiver = std::make_unique<UDSReceiver>(
         javaVm,
-        udsName,   // abstract socket name
-        "UDS‑Rx",  // thread name
-        -16,       // Android priority
+        udsName,
+        "UDS-Rx",
+        -16,
         [this](const uint8_t* data, size_t data_length) { onNewRTPData(data, data_length); },
-        WANTED_UDP_RCVBUF_SIZE  // your desired recv‑buffer size
-    );
-
+        WANTED_UDP_RCVBUF_SIZE);
     mUDSReceiver->startReceiving();
 }
 
@@ -211,10 +206,10 @@ std::string VideoPlayer::getInfoString() const
     std::stringstream ss;
     if (mUDPReceiver)
     {
-        ss << "Listening for video on port " << mUDPReceiver->getPort();
+        ss << "Listening for video on " << mUDPReceiver->getBindAddr()
+           << ":" << mUDPReceiver->getPort();
         ss << "\nReceived: " << mUDPReceiver->getNReceivedBytes() << "B"
            << " | parsed frames: ";
-        // << mParser.nParsedNALUs << " | key frames: " << mParser.nParsedKonfigurationFrames;
     }
     else if (mUDSReceiver)
     {
@@ -313,6 +308,18 @@ extern "C"
             std::string ip_cpp(ip);
             env->ReleaseStringUTFChars(ipStr, ip);
             p->setForwarding(ip_cpp, port, enabled);
+        }
+    }
+
+    JNI_METHOD(void, nativeSetUdpConfig)
+    (JNIEnv* env, jclass jclass1, jlong nativeInstance, jstring bindAddrStr, jint port)
+    {
+        VideoPlayer* p = native(nativeInstance);
+        if (p)
+        {
+            const char* addr = env->GetStringUTFChars(bindAddrStr, nullptr);
+            p->setUdpConfig(std::string(addr), (int) port);
+            env->ReleaseStringUTFChars(bindAddrStr, addr);
         }
     }
 

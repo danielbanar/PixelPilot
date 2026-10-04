@@ -58,6 +58,12 @@ class VideoPlayer
 
     void setLowLatency(bool enabled) { videoDecoder.setLowLatency(enabled); }
 
+    void setUdpConfig(const std::string& bindAddr, int port)
+    {
+        mUdpBindAddr = bindAddr;
+        mUdpPort     = port;
+    }
+
   private:
     void onNewNALU(const NALU& nalu);
 
@@ -130,6 +136,9 @@ class VideoPlayer
     std::string mForwardIP = "";
     int         mForwardPort = 0;
     bool        mForwardEnabled = false;
+    
+    std::string mUdpBindAddr = "0.0.0.0";
+    int         mUdpPort     = 5600;
 
   public:
     AudioDecoder                 audioDecoder;
